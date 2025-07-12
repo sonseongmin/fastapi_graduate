@@ -15,7 +15,7 @@ jobs:
     - name: Start SSH agent
       uses: webfactory/ssh-agent@v0.8.0
       with:
-        ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
+        ssh-private-key: ${{ secrets.EC2_SSH_KEY_BASE64 }}
 
     - name: Sync to EC2
       run: |
