@@ -1,0 +1,38 @@
+# Python 
+__pycache__/
+*.pyo
+*.pyd
+*.so
+#a
+# 가상환경
+.venv/
+venv/
+env/
+ENV/
+
+# VSCode 설정파일
+.vscode/
+
+# 환경 변수
+.env
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 로그
+*.log
+
+# IDE
+.idea/
+*.iml
+
+# 파이썬 빌드
+build/
+dist/
+*.egg-info/
+
+# Docker 관련 (필요에 따라)
+*.dockerfile
+docker-compose.override.yml
