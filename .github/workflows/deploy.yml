@@ -1,61 +1,108 @@
+name: Build & Deploy Bodylog Backend
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "app/**"
+      - "alembic/**"
+      - "alembic.ini"
+      - "Dockerfile"
+      - "requirements.txt"
+      - ".github/workflows/deploy.yml"
+      - ".dockerignore"
+  workflow_dispatch:
+
+concurrency:
+  group: bodylog-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/bodylog-backend
+  CONTAINER_NAME: bodylog-backend
+  PORT: ${{ secrets.APP_PORT }}
+  APP_ENV: ${{ secrets.APP_ENV }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract short SHA
+        id: meta
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build & Push (latest + sha)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.SHORT_SHA }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:latest
+          cache-to: type=inline
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      # 0) 시크릿/입력값 점검 (이름 불일치 즉시 감지)
       - name: Print & validate secrets (sanity)
+        shell: bash
         run: |
-          echo "EC2_HOST='${{ secrets.EC2_HOST }}'"
-          echo "Has PEM?   $([ -n '${{ secrets.EC2_SSH_KEY_PEM }}' ] && echo yes || echo no)"
-          echo "Has BASE64? $([ -n '${{ secrets.EC2_SSH_KEY_BASE64 }}' ] && echo yes || echo no)"
-          fail=0
-          [ -z "${{ secrets.EC2_HOST }}" ] && echo "❌ EC2_HOST secret missing" && fail=1
-          # 키는 PEM 또는 BASE64 중 하나는 반드시 있어야 함
+          echo "EC2_HOST set? $([ -n '${{ secrets.EC2_HOST }}' ] && echo yes || echo no)"
+          if [ -z "${{ secrets.EC2_HOST }}" ]; then echo 'EC2_HOST missing' && exit 1; fi
           if [ -z "${{ secrets.EC2_SSH_KEY_PEM }}" ] && [ -z "${{ secrets.EC2_SSH_KEY_BASE64 }}" ]; then
-            echo "❌ Need EC2_SSH_KEY_PEM or EC2_SSH_KEY_BASE64"
-            fail=1
+            echo 'Need EC2_SSH_KEY_PEM or EC2_SSH_KEY_BASE64' && exit 1
           fi
-          [ $fail -eq 1 ] && exit 1 || echo "✅ secrets name check OK"
+          echo "✅ secrets OK"
 
-      # 1) ssh key 파일 생성 (PEM 우선, 없으면 BASE64 사용)
       - name: Prepare SSH key (prefer PEM, else BASE64)
+        shell: bash
         run: |
           if [ -n "${{ secrets.EC2_SSH_KEY_PEM }}" ]; then
             printf "%s" "${{ secrets.EC2_SSH_KEY_PEM }}" > ssh_key.pem
           else
-            # BASE64 → PEM 안전 디코딩 (개행 보존)
             printf "%s" "${{ secrets.EC2_SSH_KEY_BASE64 }}" | base64 -d > ssh_key.pem
           fi
           chmod 600 ssh_key.pem
-          echo "✅ ssh_key.pem ready"
 
-      # 2) 호스트 업 & 22/tcp 오픈 확인 (EC2 꺼져 있으면 여기서 즉시 알림)
       - name: Preflight: host up & port 22 open
+        shell: bash
         run: |
-          echo "Host: ${{ secrets.EC2_HOST }}"
-          getent hosts "${{ secrets.EC2_HOST }}" || true
-          if ! timeout 3 bash -c ">/dev/tcp/${{ secrets.EC2_HOST }}/22" 2>/dev/null; then
-            echo "⚠️ EC2 22/tcp 닫힘 또는 인스턴스 OFF → 보안그룹/퍼블릭IP/인스턴스 상태 확인"
-            exit 1
+          if ! timeout 3 bash -lc ">/dev/tcp/${{ secrets.EC2_HOST }}/22"; then
+            echo "EC2 not reachable on 22/tcp" && exit 1
           fi
-          echo "✅ 22/tcp reachable"
 
-      # 3) SSH 연결 디버그 (유저명/키 정상 여부 즉시 확인)
       - name: SSH ping (debug)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ubuntu          # ✅ Ubuntu AMI → ubuntu (Amazon Linux면 ec2-user)
+          username: ubuntu
           key_path: ssh_key.pem
           debug: true
           script_stop: true
           script: |
             echo "✅ SSH connected"
-            whoami || true
-            uname -a || true
-            command -v docker && docker --version || echo "⚠️ docker not found"
+            whoami
+            uname -a
+            command -v docker && docker --version || echo "docker not found"
 
-      # 4) 실제 배포
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -70,39 +117,26 @@
             NAME="${CONTAINER_NAME}"
             PORT="${PORT:-8000}"
 
-            echo "[1/5] docker login (optional)"
-            if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-              echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin || true
-            fi
-
-            echo "[2/5] docker pull ${IMAGE}"
-            docker pull "${IMAGE}"
-
-            echo "[3/5] stop & remove existing container if any"
+            docker pull "${IMAGE}" || true
             if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
               docker rm -f "${NAME}" || true
             fi
 
             ENV_FILE_OPT=""
             if [ -n "${APP_ENV:-}" ]; then
-              echo "[4/5] writing .env from secret"
               echo "${APP_ENV}" > .env
               ENV_FILE_OPT="--env-file .env"
             fi
 
-            echo "[4/5] run new container"
             docker run -d \
               --name "${NAME}" \
-              -p ${PORT}:8000 \
+              -p "${PORT}:8000" \
               ${ENV_FILE_OPT} \
               --restart unless-stopped \
               "${IMAGE}"
 
             if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
-              echo "[5/5] running alembic upgrade head"
               docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
-            else
-              echo "[5/5] alembic not found. Skipping migrations."
             fi
 
             echo "✅ Deploy finished."
