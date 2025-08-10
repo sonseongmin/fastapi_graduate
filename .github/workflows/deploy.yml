@@ -62,7 +62,7 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      # secrets를 if에서 쓰지 말고, 여기서 검사 + 플래그 설정
+      # secrets를 if에서 직접 쓰지 않고, 플래그로 변환
       - name: Sanity check & set flags
         shell: bash
         run: |
@@ -71,23 +71,17 @@ jobs:
           echo "HAS_PEM=0"  >> "$GITHUB_ENV"
           echo "HAS_B64=0"  >> "$GITHUB_ENV"
 
-          if [ -n "${{ secrets.EC2_HOST }}" ]; then
-            echo "HAS_HOST=1" >> "$GITHUB_ENV"
-          fi
-          if [ -n "${{ secrets.EC2_SSH_KEY_PEM }}" ]; then
-            echo "HAS_PEM=1" >> "$GITHUB_ENV"
-          fi
-          if [ -n "${{ secrets.EC2_SSH_KEY_BASE64 }}" ]; then
-            echo "HAS_B64=1" >> "$GITHUB_ENV"
-          fi
+          if [ -n "${{ secrets.EC2_HOST }}" ]; then echo "HAS_HOST=1" >> "$GITHUB_ENV"; fi
+          if [ -n "${{ secrets.EC2_SSH_KEY_PEM }}" ]; then echo "HAS_PEM=1" >> "$GITHUB_ENV"; fi
+          if [ -n "${{ secrets.EC2_SSH_KEY_BASE64 }}" ]; then echo "HAS_B64=1" >> "$GITHUB_ENV"; fi
 
-          # 필수값 체크
-          if [ "$HAS_HOST" != "1" ] || { [ "$HAS_PEM" != "1" ] && [ "$HAS_B64" != "1" ]; }; then
+          if [ "${HAS_HOST:-0}" != "1" ] || { [ "${HAS_PEM:-0}" != "1" ] && [ "${HAS_B64:-0}" != "1" ]; }; then
             echo "❌ Missing secrets. Need EC2_HOST and (EC2_SSH_KEY_PEM or EC2_SSH_KEY_BASE64)."
             exit 1
           fi
+          echo "✅ secrets OK"
 
-      # 키 파일 준비 (PEM 우선, 없으면 BASE64 디코딩) — 조건은 env 플래그로
+      # 키 파일 준비: PEM 우선, 없으면 BASE64
       - name: Prepare SSH key (PEM)
         if: env.HAS_PEM == '1'
         shell: bash
@@ -96,12 +90,13 @@ jobs:
           chmod 600 ssh_key.pem
 
       - name: Prepare SSH key (BASE64)
-        if: env.HAS_PEM != '1' && env.HAS_B64 == '1'
+        if: (env.HAS_PEM != '1') && (env.HAS_B64 == '1')
         shell: bash
         run: |
           printf "%s" "${{ secrets.EC2_SSH_KEY_BASE64 }}" | base64 -d > ssh_key.pem
           chmod 600 ssh_key.pem
 
+      # 호스트 상태/22포트 오픈 확인
       - name: Preflight: host up & port 22 open
         shell: bash
         run: |
@@ -109,16 +104,18 @@ jobs:
           echo "Host: ${{ secrets.EC2_HOST }}"
           getent hosts "${{ secrets.EC2_HOST }}" || true
           if ! timeout 3 bash -lc ">/dev/tcp/${{ secrets.EC2_HOST }}/22"; then
-            echo "⚠️ EC2 22/tcp not reachable. Check instance state / SG / IP."
+            echo "⚠️ EC2 22/tcp not reachable. Check instance state / security group / public IP."
             exit 1
           fi
           echo "✅ 22/tcp reachable"
 
+      # 연결 디버그 (ubuntu 사용자)
       - name: SSH ping (debug)
+        if: (env.HAS_PEM == '1') || (env.HAS_B64 == '1')
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ubuntu          # Ubuntu AMI 고정. Amazon Linux면 ec2-user
+          username: ubuntu
           key_path: ssh_key.pem
           debug: true
           script_stop: true
@@ -128,6 +125,7 @@ jobs:
             uname -a || true
             command -v docker && docker --version || echo "⚠️ docker not found"
 
+      # 실제 배포
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -144,7 +142,7 @@ jobs:
             PORT="${PORT:-8000}"
 
             echo "[1/5] docker pull ${IMAGE}"
-            docker pull "${IMAGE}"
+            docker pull "${IMAGE}" || true
 
             echo "[2/5] stop & remove existing container if any"
             if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
