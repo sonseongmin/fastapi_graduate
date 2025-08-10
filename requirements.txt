@@ -1,14 +1,8 @@
-
 alembic
-app
-database
 fastapi
-jose
-models
+python-jose
 passlib
 pydantic
 python-multipart
-routers
-shutil
 sqlalchemy
 uvicorn
