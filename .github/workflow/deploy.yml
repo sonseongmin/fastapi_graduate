@@ -1,0 +1,165 @@
+name: Build & Deploy Bodylog Backend
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "bodylog-backend/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/bodylog-backend
+  APP_DIR: bodylog-backend
+  CONTAINER_NAME: bodylog-backend
+  PORT: ${{ secrets.APP_PORT || 8000 }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract short SHA
+        id: meta
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build & Push (latest + sha)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./bodylog-backend
+          file: ./bodylog-backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.SHORT_SHA }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:latest
+          cache-to: type=inline
+
+  deploy:
+    needs: build-and-push
+    if: ${{ secrets.SSH_HOST != '' && secrets.SSH_USER != '' && secrets.SSH_KEY != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare deploy script
+        id: prep
+        run: |
+          cat > deploy.sh << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          IMAGE="${IMAGE_NAME}:latest"
+          NAME="${CONTAINER_NAME}"
+          PORT="${PORT}"
+
+          echo "[1/5] docker pull ${IMAGE}"
+          docker pull "${IMAGE}"
+
+          echo "[2/5] stop & rm old container if exists"
+          if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
+            docker rm -f "${NAME}" || true
+          fi
+
+          # Optional: write .env from secret (if provided)
+          if [ -n "${APP_ENV:-}" ]; then
+            echo "[3/5] writing .env"
+            echo "${APP_ENV}" > .env
+            ENV_FILE="--env-file .env"
+          else
+            ENV_FILE=""
+          fi
+
+          echo "[4/5] run new container"
+          docker run -d \
+            --name "${NAME}" \
+            -p ${PORT}:8000 \
+            ${ENV_FILE} \
+            --restart unless-stopped \
+            "${IMAGE}"
+
+          # Optional: run alembic migrations inside the new container
+          if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
+            echo "[5/5] running alembic upgrade head"
+            docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
+          else
+            echo "[5/5] alembic not found in container. Skipping migrations."
+          fi
+
+          echo "✅ Deploy finished."
+          EOF
+          chmod +x deploy.sh
+
+      - name: Copy & Run over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script_stop: true
+          envs: IMAGE_NAME,CONTAINER_NAME,PORT,APP_ENV
+          script: |
+            # Ensure docker is available
+            docker --version || (echo "Docker not installed on host" && exit 1)
+            # Write secrets to env for script
+            export IMAGE_NAME="${IMAGE_NAME}"
+            export CONTAINER_NAME="${CONTAINER_NAME}"
+            export PORT="${PORT}"
+            export APP_ENV='${{ secrets.APP_ENV }}'
+            # Upload and run
+            cat > deploy.sh << 'EOS'
+            {{DEPLOY_SCRIPT}}
+            EOS
+            # Replace placeholder with actual file content from previous step
+            sed -i 's|{{DEPLOY_SCRIPT}}||' deploy.sh
+            # Overwrite with the real script by fetching from the workflow artifact via stdin
+            # (Simpler approach: re-create deploy.sh here directly.)
+            # For simplicity, we re-create the same script:
+            cat > deploy.sh << 'EOF'
+            #!/usr/bin/env bash
+            set -euo pipefail
+            IMAGE="${IMAGE_NAME}:latest"
+            NAME="${CONTAINER_NAME}"
+            PORT="${PORT}"
+            echo "[1/5] docker pull ${IMAGE}"
+            docker pull "${IMAGE}"
+            echo "[2/5] stop & rm old container if exists"
+            if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
+              docker rm -f "${NAME}" || true
+            fi
+            if [ -n "${APP_ENV:-}" ]; then
+              echo "[3/5] writing .env"
+              echo "${APP_ENV}" > .env
+              ENV_FILE="--env-file .env"
+            else
+              ENV_FILE=""
+            fi
+            echo "[4/5] run new container"
+            docker run -d \
+              --name "${NAME}" \
+              -p ${PORT}:8000 \
+              ${ENV_FILE} \
+              --restart unless-stopped \
+              "${IMAGE}"
+            if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
+              echo "[5/5] running alembic upgrade head"
+              docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
+            else
+              echo "[5/5] alembic not found in container. Skipping migrations."
+            fi
+            echo "✅ Deploy finished."
+            EOF
+            chmod +x deploy.sh
+            ./deploy.sh
