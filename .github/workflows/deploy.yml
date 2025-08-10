@@ -1,67 +1,127 @@
-deploy:
-  needs: build-and-push
-  runs-on: ubuntu-latest
-  steps:
-    - name: Check SSH secrets
-      run: |
-        if [ -z "${{ secrets.EC2_HOST }}" ] || [ -z "${{ secrets.EC2_SSH_KEY_BASE64 }}" ]; then
-          echo "❌ Missing EC2 secrets. Skipping deploy."
-          exit 0
-        fi
+name: Build & Deploy Bodylog Backend
 
-    - name: Decode SSH key
-      run: |
-        echo "${{ secrets.EC2_SSH_KEY_BASE64 }}" | base64 -d > ssh_key.pem
-        chmod 600 ssh_key.pem
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "app/**"
+      - "alembic/**"
+      - "alembic.ini"
+      - "Dockerfile"
+      - "requirements.txt"
+      - ".github/workflows/deploy.yml"
+      - ".dockerignore"
+  workflow_dispatch:
 
-    - name: Deploy over SSH
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.EC2_HOST }}
-        username: ubuntu # EC2 AMI에 맞춰 변경 (Amazon Linux면 ec2-user)
-        key_path: ssh_key.pem
-        script_stop: true
-        envs: IMAGE_NAME,CONTAINER_NAME,PORT,APP_ENV
-        script: |
-          set -euo pipefail
+concurrency:
+  group: bodylog-backend-${{ github.ref }}
+  cancel-in-progress: true
 
-          IMAGE="${IMAGE_NAME}:latest"
-          NAME="${CONTAINER_NAME}"
-          PORT="${PORT:-8000}"
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/bodylog-backend
+  CONTAINER_NAME: bodylog-backend
+  PORT: ${{ secrets.APP_PORT }}
+  APP_ENV: ${{ secrets.APP_ENV }}
 
-          echo "[1/5] docker login (optional if registry is public)"
-          if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-            echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin || true
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract short SHA
+        id: meta
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build & Push (latest + sha)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.SHORT_SHA }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:latest
+          cache-to: type=inline
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check EC2 secrets
+        run: |
+          if [ -z "${{ secrets.EC2_HOST }}" ] || [ -z "${{ secrets.EC2_SSH_KEY_BASE64 }}" ]; then
+            echo "❌ Missing EC2 secrets. Skipping deploy."
+            exit 0
           fi
 
-          echo "[2/5] docker pull ${IMAGE}"
-          docker pull "${IMAGE}"
+      - name: Decode SSH key
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY_BASE64 }}" | base64 -d > ssh_key.pem
+          chmod 600 ssh_key.pem
 
-          echo "[3/5] stop & remove existing container if any"
-          if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
-            docker rm -f "${NAME}" || true
-          fi
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu # Amazon Linux면 ec2-user 로 변경
+          key_path: ssh_key.pem
+          script_stop: true
+          envs: IMAGE_NAME,CONTAINER_NAME,PORT,APP_ENV
+          script: |
+            set -euo pipefail
 
-          ENV_FILE_OPT=""
-          if [ -n "${APP_ENV:-}" ]; then
-            echo "[4/5] writing .env from secret"
-            echo "${APP_ENV}" > .env
-            ENV_FILE_OPT="--env-file .env"
-          fi
+            IMAGE="${IMAGE_NAME}:latest"
+            NAME="${CONTAINER_NAME}"
+            PORT="${PORT:-8000}"
 
-          echo "[4/5] run new container"
-          docker run -d \
-            --name "${NAME}" \
-            -p ${PORT}:8000 \
-            ${ENV_FILE_OPT} \
-            --restart unless-stopped \
-            "${IMAGE}"
+            echo "[1/5] docker login (optional if registry is public)"
+            if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+              echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin || true
+            fi
 
-          if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
-            echo "[5/5] running alembic upgrade head"
-            docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
-          else
-            echo "[5/5] alembic not found in container. Skipping migrations."
-          fi
+            echo "[2/5] docker pull ${IMAGE}"
+            docker pull "${IMAGE}"
 
-          echo "✅ Deploy finished."
+            echo "[3/5] stop & remove existing container if any"
+            if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
+              docker rm -f "${NAME}" || true
+            fi
+
+            ENV_FILE_OPT=""
+            if [ -n "${APP_ENV:-}" ]; then
+              echo "[4/5] writing .env from secret"
+              echo "${APP_ENV}" > .env
+              ENV_FILE_OPT="--env-file .env"
+            fi
+
+            echo "[4/5] run new container"
+            docker run -d \
+              --name "${NAME}" \
+              -p ${PORT}:8000 \
+              ${ENV_FILE_OPT} \
+              --restart unless-stopped \
+              "${IMAGE}"
+
+            if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
+              echo "[5/5] running alembic upgrade head"
+              docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
+            else
+              echo "[5/5] alembic not found in container. Skipping migrations."
+            fi
+
+            echo "✅ Deploy finished."
