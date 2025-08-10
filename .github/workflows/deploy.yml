@@ -1,4 +1,4 @@
-name: Build & Deploy Bodylog Backend
+name: "Build & Deploy Bodylog Backend"
 
 on:
   push:
@@ -30,23 +30,23 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Checkout
+      - name: "Checkout"
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: "Set up Docker Buildx"
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
+      - name: "Log in to Docker Hub"
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract short SHA
+      - name: "Extract short SHA"
         id: meta
         run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Build & Push (latest + sha)
+      - name: "Build & Push (latest + sha)"
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -62,48 +62,76 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - name: Print & validate secrets (sanity)
-        shell: bash
-        run: |
-          echo "EC2_HOST set? $([ -n '${{ secrets.EC2_HOST }}' ] && echo yes || echo no)"
-          if [ -z "${{ secrets.EC2_HOST }}" ]; then echo 'EC2_HOST missing' && exit 1; fi
-          if [ -z "${{ secrets.EC2_SSH_KEY_PEM }}" ] && [ -z "${{ secrets.EC2_SSH_KEY_BASE64 }}" ]; then
-            echo 'Need EC2_SSH_KEY_PEM or EC2_SSH_KEY_BASE64' && exit 1
-          fi
-          echo "✅ secrets OK"
+      # PEM 원문을 쓰는 경우(추천)
+      - name: "SSH ping with PEM (if provided)"
+        if: ${{ secrets.EC2_HOST != '' && secrets.EC2_SSH_KEY_PEM != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY_PEM }}
+          script_stop: true
+          script: |
+            echo "✅ SSH connected (PEM)"
+            whoami
+            uname -a
 
-      - name: Prepare SSH key (prefer PEM, else BASE64)
-        shell: bash
+      # Base64 키를 쓰는 경우
+      - name: "Write base64 key to file (if provided)"
+        if: ${{ secrets.EC2_HOST != '' && secrets.EC2_SSH_KEY_BASE64 != '' }}
         run: |
-          if [ -n "${{ secrets.EC2_SSH_KEY_PEM }}" ]; then
-            printf "%s" "${{ secrets.EC2_SSH_KEY_PEM }}" > ssh_key.pem
-          else
-            printf "%s" "${{ secrets.EC2_SSH_KEY_BASE64 }}" | base64 -d > ssh_key.pem
-          fi
+          printf "%s" "${{ secrets.EC2_SSH_KEY_BASE64 }}" | base64 -d > ssh_key.pem
           chmod 600 ssh_key.pem
 
-      - name: Preflight: host up & port 22 open
-        shell: bash
-        run: |
-          if ! timeout 3 bash -lc ">/dev/tcp/${{ secrets.EC2_HOST }}/22"; then
-            echo "EC2 not reachable on 22/tcp" && exit 1
-          fi
-
-      - name: SSH ping (debug)
+      - name: "SSH ping with key_path (if base64 used)"
+        if: ${{ secrets.EC2_HOST != '' && secrets.EC2_SSH_KEY_BASE64 != '' }}
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key_path: ssh_key.pem
-          debug: true
           script_stop: true
           script: |
-            echo "✅ SSH connected"
+            echo "✅ SSH connected (BASE64)"
             whoami
             uname -a
-            command -v docker && docker --version || echo "docker not found"
 
-      - name: Deploy over SSH
+      # 실제 배포 (PEM 또는 BASE64 어느 쪽이든 하나 성공했으면 진행)
+      - name: "Deploy over SSH (PEM)"
+        if: ${{ secrets.EC2_HOST != '' && secrets.EC2_SSH_KEY_PEM != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY_PEM }}
+          script_stop: true
+          envs: IMAGE_NAME,CONTAINER_NAME,PORT,APP_ENV
+          script: |
+            set -euo pipefail
+            IMAGE="${IMAGE_NAME}:latest"
+            NAME="${CONTAINER_NAME}"
+            PORT="${PORT:-8000}"
+
+            docker pull "${IMAGE}" || true
+            if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
+              docker rm -f "${NAME}" || true
+            fi
+
+            ENV_FILE_OPT=""
+            if [ -n "${APP_ENV:-}" ]; then
+              echo "${APP_ENV}" > .env
+              ENV_FILE_OPT="--env-file .env"
+            fi
+
+            docker run -d \
+              --name "${NAME}" \
+              -p "${PORT}:8000" \
+              ${ENV_FILE_OPT} \
+              --restart unless-stopped \
+              "${IMAGE}"
+
+      - name: "Deploy over SSH (BASE64)"
+        if: ${{ secrets.EC2_HOST != '' && secrets.EC2_SSH_KEY_BASE64 != '' }}
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -134,9 +162,3 @@ jobs:
               ${ENV_FILE_OPT} \
               --restart unless-stopped \
               "${IMAGE}"
-
-            if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
-              docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
-            fi
-
-            echo "✅ Deploy finished."
