@@ -4,15 +4,25 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "bodylog-backend/**"
+      - "app/**"
+      - "alembic/**"
+      - "alembic.ini"
+      - "Dockerfile"
+      - "requirements.txt"
       - ".github/workflows/deploy.yml"
+      - ".dockerignore"
   workflow_dispatch:
+
+concurrency:
+  group: bodylog-backend-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/bodylog-backend
-  APP_DIR: bodylog-backend
   CONTAINER_NAME: bodylog-backend
-  PORT: ${{ secrets.APP_PORT || 8000 }}
+  # GitHub Expressions에서 기본값 연산자(||) 안 먹음 → 원격 스크립트에서 기본값 처리
+  PORT: ${{ secrets.APP_PORT }}
+  APP_ENV: ${{ secrets.APP_ENV }}
 
 jobs:
   build-and-push:
@@ -40,8 +50,8 @@ jobs:
       - name: Build & Push (latest + sha)
         uses: docker/build-push-action@v6
         with:
-          context: ./bodylog-backend
-          file: ./bodylog-backend/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
@@ -54,55 +64,7 @@ jobs:
     if: ${{ secrets.SSH_HOST != '' && secrets.SSH_USER != '' && secrets.SSH_KEY != '' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Prepare deploy script
-        id: prep
-        run: |
-          cat > deploy.sh << 'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          IMAGE="${IMAGE_NAME}:latest"
-          NAME="${CONTAINER_NAME}"
-          PORT="${PORT}"
-
-          echo "[1/5] docker pull ${IMAGE}"
-          docker pull "${IMAGE}"
-
-          echo "[2/5] stop & rm old container if exists"
-          if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
-            docker rm -f "${NAME}" || true
-          fi
-
-          # Optional: write .env from secret (if provided)
-          if [ -n "${APP_ENV:-}" ]; then
-            echo "[3/5] writing .env"
-            echo "${APP_ENV}" > .env
-            ENV_FILE="--env-file .env"
-          else
-            ENV_FILE=""
-          fi
-
-          echo "[4/5] run new container"
-          docker run -d \
-            --name "${NAME}" \
-            -p ${PORT}:8000 \
-            ${ENV_FILE} \
-            --restart unless-stopped \
-            "${IMAGE}"
-
-          # Optional: run alembic migrations inside the new container
-          if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
-            echo "[5/5] running alembic upgrade head"
-            docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
-          else
-            echo "[5/5] alembic not found in container. Skipping migrations."
-          fi
-
-          echo "✅ Deploy finished."
-          EOF
-          chmod +x deploy.sh
-
-      - name: Copy & Run over SSH
+      - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -111,55 +73,49 @@ jobs:
           script_stop: true
           envs: IMAGE_NAME,CONTAINER_NAME,PORT,APP_ENV
           script: |
-            # Ensure docker is available
-            docker --version || (echo "Docker not installed on host" && exit 1)
-            # Write secrets to env for script
-            export IMAGE_NAME="${IMAGE_NAME}"
-            export CONTAINER_NAME="${CONTAINER_NAME}"
-            export PORT="${PORT}"
-            export APP_ENV='${{ secrets.APP_ENV }}'
-            # Upload and run
-            cat > deploy.sh << 'EOS'
-            {{DEPLOY_SCRIPT}}
-            EOS
-            # Replace placeholder with actual file content from previous step
-            sed -i 's|{{DEPLOY_SCRIPT}}||' deploy.sh
-            # Overwrite with the real script by fetching from the workflow artifact via stdin
-            # (Simpler approach: re-create deploy.sh here directly.)
-            # For simplicity, we re-create the same script:
-            cat > deploy.sh << 'EOF'
-            #!/usr/bin/env bash
             set -euo pipefail
+
             IMAGE="${IMAGE_NAME}:latest"
             NAME="${CONTAINER_NAME}"
-            PORT="${PORT}"
-            echo "[1/5] docker pull ${IMAGE}"
+            PORT="${PORT:-8000}"   # 기본값 8000
+
+            echo "[1/5] docker login (optional if registry is public)"
+            if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+              echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin || true
+            fi
+
+            echo "[2/5] docker pull ${IMAGE}"
             docker pull "${IMAGE}"
-            echo "[2/5] stop & rm old container if exists"
+
+            echo "[3/5] stop & remove existing container if any"
             if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
               docker rm -f "${NAME}" || true
             fi
+
+            # (선택) .env 파일 내용을 Secrets로 전달했다면 컨테이너에 적용
+            ENV_FILE_OPT=""
             if [ -n "${APP_ENV:-}" ]; then
-              echo "[3/5] writing .env"
+              echo "[4/5] writing .env from secret"
               echo "${APP_ENV}" > .env
-              ENV_FILE="--env-file .env"
-            else
-              ENV_FILE=""
+              ENV_FILE_OPT="--env-file .env"
             fi
+
             echo "[4/5] run new container"
             docker run -d \
               --name "${NAME}" \
               -p ${PORT}:8000 \
-              ${ENV_FILE} \
+              ${ENV_FILE_OPT} \
               --restart unless-stopped \
               "${IMAGE}"
+
+            # (선택) Alembic migrations
             if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
               echo "[5/5] running alembic upgrade head"
               docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
             else
               echo "[5/5] alembic not found in container. Skipping migrations."
             fi
+
             echo "✅ Deploy finished."
-            EOF
-            chmod +x deploy.sh
-            ./deploy.sh
+on:
+  workflow_dispatch:
