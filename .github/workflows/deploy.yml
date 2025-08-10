@@ -20,9 +20,11 @@ concurrency:
 env:
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/bodylog-backend
   CONTAINER_NAME: bodylog-backend
-  # GitHub Expressions에서 기본값 연산자(||) 안 먹음 → 원격 스크립트에서 기본값 처리
   PORT: ${{ secrets.APP_PORT }}
   APP_ENV: ${{ secrets.APP_ENV }}
+  SSH_HOST: ${{ secrets.SSH_HOST }}
+  SSH_USER: ${{ secrets.SSH_USER }}
+  SSH_KEY: ${{ secrets.SSH_KEY }}
 
 jobs:
   build-and-push:
@@ -61,15 +63,15 @@ jobs:
 
   deploy:
     needs: build-and-push
-    if: ${{ secrets.SSH_HOST != '' && secrets.SSH_USER != '' && secrets.SSH_KEY != '' }}
     runs-on: ubuntu-latest
+    if: ${{ env.SSH_HOST != '' && env.SSH_USER != '' && env.SSH_KEY != '' }}
     steps:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
           script_stop: true
           envs: IMAGE_NAME,CONTAINER_NAME,PORT,APP_ENV
           script: |
@@ -77,7 +79,7 @@ jobs:
 
             IMAGE="${IMAGE_NAME}:latest"
             NAME="${CONTAINER_NAME}"
-            PORT="${PORT:-8000}"   # 기본값 8000
+            PORT="${PORT:-8000}"
 
             echo "[1/5] docker login (optional if registry is public)"
             if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
@@ -92,7 +94,6 @@ jobs:
               docker rm -f "${NAME}" || true
             fi
 
-            # (선택) .env 파일 내용을 Secrets로 전달했다면 컨테이너에 적용
             ENV_FILE_OPT=""
             if [ -n "${APP_ENV:-}" ]; then
               echo "[4/5] writing .env from secret"
@@ -108,7 +109,6 @@ jobs:
               --restart unless-stopped \
               "${IMAGE}"
 
-            # (선택) Alembic migrations
             if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
               echo "[5/5] running alembic upgrade head"
               docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
@@ -117,5 +117,3 @@ jobs:
             fi
 
             echo "✅ Deploy finished."
-on:
-  workflow_dispatch:
