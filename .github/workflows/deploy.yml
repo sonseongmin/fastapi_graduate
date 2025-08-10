@@ -1,56 +1,116 @@
-deploy:
-  needs: build-and-push
-  runs-on: ubuntu-latest
-  if: ${{ secrets.SSH_HOST && secrets.SSH_USER && secrets.SSH_KEY }}
-  steps:
-    - name: Deploy over SSH
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.SSH_HOST }}
-        username: ${{ secrets.SSH_USER }}
-        key: ${{ secrets.SSH_KEY }}
-        script_stop: true
-        envs: IMAGE_NAME,CONTAINER_NAME,PORT,APP_ENV
-        script: |
-          set -euo pipefail
+name: Build & Deploy Bodylog Backend
 
-          IMAGE="${IMAGE_NAME}:latest"
-          NAME="${CONTAINER_NAME}"
-          PORT="${PORT:-8000}"
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "app/**"
+      - "alembic/**"
+      - "alembic.ini"
+      - "Dockerfile"
+      - "requirements.txt"
+      - ".github/workflows/deploy.yml"
+      - ".dockerignore"
+  workflow_dispatch:
 
-          echo "[1/5] docker login (optional if registry is public)"
-          if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-            echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin || true
-          fi
+concurrency:
+  group: bodylog-backend-${{ github.ref }}
+  cancel-in-progress: true
 
-          echo "[2/5] docker pull ${IMAGE}"
-          docker pull "${IMAGE}"
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/bodylog-backend
+  CONTAINER_NAME: bodylog-backend
+  PORT: ${{ secrets.APP_PORT }}
+  APP_ENV: ${{ secrets.APP_ENV }}
 
-          echo "[3/5] stop & remove existing container if any"
-          if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
-            docker rm -f "${NAME}" || true
-          fi
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-          ENV_FILE_OPT=""
-          if [ -n "${APP_ENV:-}" ]; then
-            echo "[4/5] writing .env from secret"
-            echo "${APP_ENV}" > .env
-            ENV_FILE_OPT="--env-file .env"
-          fi
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-          echo "[4/5] run new container"
-          docker run -d \
-            --name "${NAME}" \
-            -p ${PORT}:8000 \
-            ${ENV_FILE_OPT} \
-            --restart unless-stopped \
-            "${IMAGE}"
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-          if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
-            echo "[5/5] running alembic upgrade head"
-            docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
-          else
-            echo "[5/5] alembic not found in container. Skipping migrations."
-          fi
+      - name: Extract short SHA
+        id: meta
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-          echo "✅ Deploy finished."
+      - name: Build & Push (latest + sha)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.SHORT_SHA }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:latest
+          cache-to: type=inline
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: ${{ secrets.SSH_HOST && secrets.SSH_USER && secrets.SSH_KEY }}
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script_stop: true
+          envs: IMAGE_NAME,CONTAINER_NAME,PORT,APP_ENV
+          script: |
+            set -euo pipefail
+
+            IMAGE="${IMAGE_NAME}:latest"
+            NAME="${CONTAINER_NAME}"
+            PORT="${PORT:-8000}"
+
+            echo "[1/5] docker login (optional if registry is public)"
+            if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+              echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin || true
+            fi
+
+            echo "[2/5] docker pull ${IMAGE}"
+            docker pull "${IMAGE}"
+
+            echo "[3/5] stop & remove existing container if any"
+            if [ "$(docker ps -aq -f name=^/${NAME}\$)" ]; then
+              docker rm -f "${NAME}" || true
+            fi
+
+            ENV_FILE_OPT=""
+            if [ -n "${APP_ENV:-}" ]; then
+              echo "[4/5] writing .env from secret"
+              echo "${APP_ENV}" > .env
+              ENV_FILE_OPT="--env-file .env"
+            fi
+
+            echo "[4/5] run new container"
+            docker run -d \
+              --name "${NAME}" \
+              -p ${PORT}:8000 \
+              ${ENV_FILE_OPT} \
+              --restart unless-stopped \
+              "${IMAGE}"
+
+            if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
+              echo "[5/5] running alembic upgrade head"
+              docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
+            else
+              echo "[5/5] alembic not found in container. Skipping migrations."
+            fi
+
+            echo "✅ Deploy finished."
