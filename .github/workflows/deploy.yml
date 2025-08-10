@@ -30,23 +30,23 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Checkout
+      - name: "Checkout"
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: "Set up Docker Buildx"
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
+      - name: "Log in to Docker Hub"
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract short SHA
+      - name: "Extract short SHA"
         id: meta
         run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Build & Push (latest + sha)
+      - name: "Build & Push (latest + sha)"
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -62,56 +62,39 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      # secrets를 if에서 직접 쓰지 않고, 플래그로 변환
-      - name: Sanity check & set flags
+      - name: "Sanity: check required secrets"
         shell: bash
         run: |
           set -e
-          echo "HAS_HOST=0" >> "$GITHUB_ENV"
-          echo "HAS_PEM=0"  >> "$GITHUB_ENV"
-          echo "HAS_B64=0"  >> "$GITHUB_ENV"
-
-          if [ -n "${{ secrets.EC2_HOST }}" ]; then echo "HAS_HOST=1" >> "$GITHUB_ENV"; fi
-          if [ -n "${{ secrets.EC2_SSH_KEY_PEM }}" ]; then echo "HAS_PEM=1" >> "$GITHUB_ENV"; fi
-          if [ -n "${{ secrets.EC2_SSH_KEY_BASE64 }}" ]; then echo "HAS_B64=1" >> "$GITHUB_ENV"; fi
-
-          if [ "${HAS_HOST:-0}" != "1" ] || { [ "${HAS_PEM:-0}" != "1" ] && [ "${HAS_B64:-0}" != "1" ]; }; then
-            echo "❌ Missing secrets. Need EC2_HOST and (EC2_SSH_KEY_PEM or EC2_SSH_KEY_BASE64)."
-            exit 1
+          if [ -z "${{ secrets.EC2_HOST }}" ]; then
+            echo "EC2_HOST is missing"; exit 1
           fi
-          echo "✅ secrets OK"
+          if [ -z "${{ secrets.EC2_SSH_KEY_PEM }}" ] && [ -z "${{ secrets.EC2_SSH_KEY_BASE64 }}" ]; then
+            echo "Provide EC2_SSH_KEY_PEM or EC2_SSH_KEY_BASE64"; exit 1
+          fi
+          echo "secrets OK"
 
-      # 키 파일 준비: PEM 우선, 없으면 BASE64
-      - name: Prepare SSH key (PEM)
-        if: env.HAS_PEM == '1'
+      - name: "Prepare SSH key"
         shell: bash
         run: |
-          printf "%s" "${{ secrets.EC2_SSH_KEY_PEM }}" > ssh_key.pem
+          if [ -n "${{ secrets.EC2_SSH_KEY_PEM }}" ]; then
+            printf "%s" "${{ secrets.EC2_SSH_KEY_PEM }}" > ssh_key.pem
+          else
+            printf "%s" "${{ secrets.EC2_SSH_KEY_BASE64 }}" | base64 -d > ssh_key.pem
+          fi
           chmod 600 ssh_key.pem
 
-      - name: Prepare SSH key (BASE64)
-        if: (env.HAS_PEM != '1') && (env.HAS_B64 == '1')
-        shell: bash
-        run: |
-          printf "%s" "${{ secrets.EC2_SSH_KEY_BASE64 }}" | base64 -d > ssh_key.pem
-          chmod 600 ssh_key.pem
-
-      # 호스트 상태/22포트 오픈 확인
-      - name: Preflight: host up & port 22 open
+      - name: "Preflight: host up & port 22 open"
         shell: bash
         run: |
           set -e
           echo "Host: ${{ secrets.EC2_HOST }}"
           getent hosts "${{ secrets.EC2_HOST }}" || true
           if ! timeout 3 bash -lc ">/dev/tcp/${{ secrets.EC2_HOST }}/22"; then
-            echo "⚠️ EC2 22/tcp not reachable. Check instance state / security group / public IP."
-            exit 1
+            echo "EC2 not reachable on 22/tcp"; exit 1
           fi
-          echo "✅ 22/tcp reachable"
 
-      # 연결 디버그 (ubuntu 사용자)
-      - name: SSH ping (debug)
-        if: (env.HAS_PEM == '1') || (env.HAS_B64 == '1')
+      - name: "SSH ping (debug)"
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -120,13 +103,12 @@ jobs:
           debug: true
           script_stop: true
           script: |
-            echo "✅ SSH connected"
+            echo "SSH connected"
             whoami || true
             uname -a || true
-            command -v docker && docker --version || echo "⚠️ docker not found"
+            command -v docker && docker --version || echo "docker not found"
 
-      # 실제 배포
-      - name: Deploy over SSH
+      - name: "Deploy over SSH"
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -134,6 +116,7 @@ jobs:
           key_path: ssh_key.pem
           script_stop: true
           envs: IMAGE_NAME,CONTAINER_NAME,PORT,APP_ENV
+        # ↓↓↓ 셸에서 분기/에러처리, YAML if 없음
           script: |
             set -euo pipefail
 
@@ -164,8 +147,8 @@ jobs:
               "${IMAGE}"
 
             if docker exec "${NAME}" sh -lc 'command -v alembic >/dev/null 2>&1'; then
-              echo "[4/5] running alembic upgrade head"
+              echo "[4/5] alembic upgrade head"
               docker exec "${NAME}" sh -lc 'alembic upgrade head' || true
             fi
 
-            echo "✅ Deploy finished."
+            echo "Deploy finished"
