@@ -109,7 +109,7 @@ jobs:
             echo "[3/3] run new container"
             docker run -d \
               --name "${NAME}" \
-              -p 8000:8000 \
+              -p 5000:5000 \
               --restart unless-stopped \
               "${IMAGE}"
 
