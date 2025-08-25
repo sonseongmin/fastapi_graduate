@@ -10,12 +10,35 @@ from app import models, schemas, database, auth
 from app.auth import security, get_current_user
 
 from fastapi.middleware.cors import CORSMiddleware
-from routers import auth_extra 
+from app.routers import auth_extra 
 
 # FastAPI 앱 초기화
 app = FastAPI()
 
-# main.py 최상단 app = FastAPI() 아래에 추가
+import time
+import os
+import shutil
+import httpx
+import json
+from fastapi import Form
+
+def analyze_video(file_path: str, category: str) -> dict:
+    """
+    AI 서버에 POST 요청 보내서 분석 결과 가져오기
+    """
+    start_time = time.time()
+    ai_url = "http://localhost:8001/analyze"  # AI 서버 주소
+
+    files = {"file": open(file_path, "rb")}
+    data = {"category": category}
+
+    with httpx.Client() as client:
+        response = client.post(ai_url, files=files, data=data)
+        result = response.json()
+
+    result["elapsed_time"] = round(time.time() - start_time, 2)
+    return result
+
 from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
@@ -30,6 +53,10 @@ app.add_middleware(
 # 라우터 등록 (로그인 포함)
 app.include_router(auth.router)
 app.include_router(auth_extra.router)
+
+# 업로드 라우터 등록
+from app.routers import upload
+app.include_router(upload.router, prefix="/api/v1/exercise")
 
 # DB 테이블 생성
 models.Base.metadata.create_all(bind=database.engine)
@@ -180,6 +207,32 @@ async def upload_exercise_video(
     # 예: AI 분석 비동기 요청 → 완료 시 상태를 바꾸는 로직 필요
     return {"result_id": result_id}
 
+
+
+from app.schemas import AnalyzeResponse
+# AI로부터 운동 분석 결과 받기
+@app.post("/api/v1/exercise/analyze", response_model=AnalyzeResponse)
+async def analyze_exercise(
+    file: UploadFile = File(...),
+    category: str = Form(...),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. 파일 저장
+    UPLOAD_DIR = "media"
+    category_dir = os.path.join(UPLOAD_DIR, category)
+    os.makedirs(category_dir, exist_ok=True)
+
+    unique_filename = f"{uuid.uuid4()}_{file.filename}"
+    file_path = os.path.join(category_dir, unique_filename)
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # 2. AI 분석
+    result = analyze_video(file_path, category)
+
+    # 3. 결과 반환
+    return result
 
 
 # 운동 분석 결과 조회

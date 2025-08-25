@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from datetime import datetime
+from datetime import datetime, date
 from enum import Enum
 
 
@@ -84,3 +84,15 @@ class InbodyOut(InbodyCreate):
 class PasswordResetRequest(BaseModel):
     username: str
     new_password: str
+
+
+# AI 서버에서 분석결과 받아오기
+class AnalyzeResponse(BaseModel):
+    exercise_name: str
+    count_total: int
+    count_incorrect: int
+    feedback: str
+    elapsed_time: float
+
+    class Config:
+        from_attributes = True
