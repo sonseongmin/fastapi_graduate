@@ -13,7 +13,7 @@ SECRET_KEY = "your-secret-key"  # TODO: 환경변수로 교체 권장
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-router = APIRouter()
+router = APIRouter(prefix="/api", tags=["Auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ✅ HTTPBearer로 변경 (Swagger 연동 잘됨)
