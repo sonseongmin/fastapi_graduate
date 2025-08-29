@@ -27,7 +27,7 @@ def analyze_video(file_path: str, category: str) -> dict:
     AI 서버에 POST 요청 보내서 분석 결과 가져오기
     """
     start_time = time.time()
-    ai_url = "http://localhost:8001/analyze"  # AI 서버 주소
+    ai_url = "http://3.39.194.20:8001/analyze"  # AI 서버 주소
 
     files = {"file": open(file_path, "rb")}
     data = {"category": category}
