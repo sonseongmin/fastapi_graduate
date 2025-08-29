@@ -32,7 +32,7 @@ def analyze_video(file_path: str, category: str) -> dict:
     files = {"file": open(file_path, "rb")}
     data = {"exercise": category}
 
-    with httpx.Client() as client:
+    with httpx.Client(timeout=60.0) as client:
         response = client.post(ai_url, files=files, data=data)
         result = response.json()
 
