@@ -22,7 +22,7 @@ import httpx
 import json
 from fastapi import Form
 
-def analyze_video(file_path: str, exercise: str) -> dict:
+def analyze_video(file_path: str, category: str) -> dict:
     """
     AI 서버에 POST 요청 보내서 분석 결과 가져오기
     """
@@ -30,7 +30,7 @@ def analyze_video(file_path: str, exercise: str) -> dict:
     ai_url = "http://3.39.194.20:8001/analyze"  # AI 서버 주소
 
     files = {"file": open(file_path, "rb")}
-    data = {"exercise": exercise}
+    data = {"category": category}
 
     with httpx.Client() as client:
         response = client.post(ai_url, files=files, data=data)
@@ -214,7 +214,7 @@ from app.schemas import AnalyzeResponse
 @app.post("/api/v1/exercise/analyze", response_model=AnalyzeResponse)
 async def analyze_exercise(
     file: UploadFile = File(...),
-    exercise: str = Form(...),
+    category: str = Form(...),
     current_user: models.User = Depends(get_current_user)
 ):
     # 1. 파일 저장
@@ -229,7 +229,7 @@ async def analyze_exercise(
         shutil.copyfileobj(file.file, buffer)
 
     # 2. AI 분석
-    result = analyze_video(file_path, exercise)
+    result = analyze_video(file_path, category)
 
     # 3. 결과 반환
     return result
