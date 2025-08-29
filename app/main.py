@@ -214,7 +214,7 @@ from app.schemas import AnalyzeResponse
 @app.post("/api/v1/exercise/analyze", response_model=AnalyzeResponse)
 async def analyze_exercise(
     file: UploadFile = File(...),
-    category: str = Form(...),
+    exercise: str = Form(...),
     current_user: models.User = Depends(get_current_user)
 ):
     # 1. 파일 저장
@@ -229,7 +229,7 @@ async def analyze_exercise(
         shutil.copyfileobj(file.file, buffer)
 
     # 2. AI 분석
-    result = analyze_video(file_path, category)
+    result = analyze_video(file_path, exercise)
 
     # 3. 결과 반환
     return result

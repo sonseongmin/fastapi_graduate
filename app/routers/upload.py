@@ -10,7 +10,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)  # media 폴더 없으면 생성
 
 @router.post("/upload")
 def upload_video(
-    category: str = Form(...),   # 프론트에서 넘어오는 운동 카테고리
+    exercise: str = Form(...),   # 프론트에서 넘어오는 운동 카테고리
     file: UploadFile = File(...),
 ):
     # 1. 카테고리별 폴더 생성
@@ -30,7 +30,7 @@ def upload_video(
 
     return {
         "filename": unique_filename,
-        "category": category,
+        "exercise": exercise,
         "message": "Upload success!",
         "path": file_path
     }
