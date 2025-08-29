@@ -91,7 +91,7 @@ class AnalyzeResponse(BaseModel):
     exercise_name: str
     count_total: int
     count_incorrect: int
-    feedback: str
+    feedback: list[str]
     elapsed_time: float
 
     class Config:
