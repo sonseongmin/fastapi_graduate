@@ -40,8 +40,16 @@ def login(login_req: schemas.LoginRequest, db: Session = Depends(database.get_db
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
-
+    return JSONResponse(
+        content={
+            "access_token": access_token,
+            "token_type": "bearer",
+            "name": user.name,
+            "username": user.username,
+            "email": user.email,
+        },
+        media_type="application/json; charset=utf-8"  # <- 이게 핵심
+    )
 # ✅ 현재 유저 반환 (보호된 라우트에서 사용)
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
