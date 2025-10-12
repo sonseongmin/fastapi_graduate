@@ -3,10 +3,10 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from fastapi.responses import JSONResponse
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
-
 from app import models, schemas, database
 
 SECRET_KEY = "your-secret-key"  # TODO: 환경변수로 교체 권장
