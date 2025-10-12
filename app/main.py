@@ -111,12 +111,12 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(database.get_db)
     return new_user
 
 # /me API (토큰 확인용)
-@app.get("/me", response_model=schemas.UserOut)
+@app.get("api/me", response_model=schemas.UserOut)
 def read_users_me(current_user: models.User = Depends(get_current_user)):
     return current_user
 
 # 디버그용: 토큰 안에 뭐 들어있는지 보기
-@app.get("/debug-token")
+@app.get("api/debug-token")
 def debug_token(request: Request, current_user: models.User = Depends(get_current_user)):
     return {
         "token_verified": True,
