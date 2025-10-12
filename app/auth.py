@@ -1,4 +1,4 @@
-# app/auth.py
+# app/auth.py뀨
 
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
