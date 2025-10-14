@@ -39,7 +39,8 @@ class WorkoutCreate(BaseModel):
     avg_accuracy: Optional[float] = None   # ← float/None 로 완화 (분석 결과와 맞춤)
     started_at: Optional[datetime] = None    # ✅ 추가
     ended_at: Optional[datetime] = None      # ✅ 추가
-
+    calories: Optional[float] = None
+    
 # 운동 기록을 조회할 때 사용하는 모델
 class WorkoutOut(WorkoutCreate):
     id: int

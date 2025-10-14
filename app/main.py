@@ -179,7 +179,8 @@ def create_workout(
         started_at=workout.started_at,
         ended_at=workout.ended_at,
         rep_count=workout.rep_count,
-        avg_accuracy=workout.avg_accuracy
+        avg_accuracy=workout.avg_accuracy,
+        calories=workout.calories
     )
     db.add(new_workout)
     db.commit()
