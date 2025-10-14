@@ -52,8 +52,18 @@ def analyze_video_bytes(file_bytes: bytes, filename: str, content_type: str | No
     ai_url = "http://bodylog-ai:8001/analyze"
 
     files = {"file": (filename, file_bytes, content_type or "application/octet-stream")}
-    with httpx.Client(timeout=60) as client:
+
+    timeout_config = httpx.Timeout(
+    connect=600.0,  # 연결 수립
+    read=600.0,    # 응답 읽기
+    write=600.0,   # 파일 전송
+    pool=600.0      # 커넥션 풀 대기
+    )
+
+    with httpx.Client(timeout=timeout_config) as client:
+        print("[DEBUG] AI 요청 시작", flush=True)
         resp = client.post(ai_url, files=files)
+        print(f"[DEBUG] AI 응답 수신: {resp.status_code}", flush=True)
         resp.raise_for_status()
         return resp.json()
 
