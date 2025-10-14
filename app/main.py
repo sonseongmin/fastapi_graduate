@@ -228,11 +228,16 @@ def persist_analysis_to_db(result: dict, user_id: int) -> int:
         except Exception:
             pass
 
+        rep_count = int(result.get("rep_count") or result.get("count") or 0)
+        avg_accuracy = result.get("avg_accuracy") or result.get("acc") or 90
+        calories = calculate_calories(exercise_type_val.value if hasattr(exercise_type_val, "value") else exercise_type_val, rep_count)
+
         workout = models.Workout(
-            user_id=user_id,
-            exercise_type=exercise_type_val,
-            rep_count=int(result.get("rep_count") or result.get("count") or 0),
-            avg_accuracy=result.get("avg_accuracy"),
+            user_id= user_id,
+            exercise_type= exercise_type_val,
+            rep_count= rep_count,
+            avg_accuracy=avg_accuracy,
+            calories=calories 
         )
         session.add(workout)
         session.flush()
