@@ -175,7 +175,6 @@ def create_workout(
     current_user: models.User = Depends(get_current_user)
 ):
     new_workout = models.Workout(
-        user_id=current_user.id,
         exercise_type=workout.exercise_type,
         started_at=workout.started_at,
         ended_at=workout.ended_at,
