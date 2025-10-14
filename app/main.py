@@ -5,6 +5,7 @@ import httpx
 from fastapi import (
     FastAPI, Depends, HTTPException, File, UploadFile, Request, APIRouter, Path
 )
+from app.routers import workout_routes
 from sqlalchemy.orm import Session
 from datetime import datetime
 from app import models, schemas, database, auth
@@ -27,7 +28,7 @@ from fastapi import Form
 import logging
 logger = logging.getLogger("uvicorn.error")
 JOB_STATUS= {}
-
+app.include_router(workout_routes.router)
 def analyze_video(file_path: str, category: str) -> dict:
     """
     AI 서버에 POST 요청 보내서 분석 결과 가져오기
