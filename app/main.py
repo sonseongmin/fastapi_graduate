@@ -345,7 +345,7 @@ async def process_analysis_task(job_id: str, file_bytes: bytes, filename: str, c
 
         JOB_STATUS[job_id].update({"status": "done", "result": result})
     except Exception as e:
-        print(f"[ERROR] process_analysis_task failed: {e}")
+        print(f"[ERROR] process_analysis_task failed: {e}", flush=True)
         JOB_STATUS[job_id].update({"status": "error", "error": str(e)})
 
 app.include_router(auth.router)
