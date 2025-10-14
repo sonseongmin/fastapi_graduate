@@ -41,7 +41,8 @@ class Workout(Base):
     started_at = Column(DateTime)
     ended_at = Column(DateTime)
     rep_count = Column(Integer)
-    avg_accuracy = Column(Integer)  # 예: 93 = 93%
+    avg_accuracy = Column(Integer)
+    calories = Column(Float)  # 예: 93 = 93%
 
     user = relationship("User", back_populates="workouts")
     reps = relationship("Rep", back_populates="workout")
