@@ -168,7 +168,7 @@ app.openapi = custom_openapi
 
 
 # 운동 기록 저장
-@app.post("/workouts", response_model=schemas.WorkoutOut)
+@app.post("/api/v1/workouts", response_model=schemas.WorkoutOut)
 def create_workout(
     workout: schemas.WorkoutCreate,
     db: Session = Depends(database.get_db),
@@ -189,7 +189,7 @@ def create_workout(
 
 
 # 운동 기록 조회
-@app.get("/workouts", response_model=list[schemas.WorkoutOut], dependencies=[Depends(get_current_user)])
+@app.get("/api/v1/workouts", response_model=list[schemas.WorkoutOut], dependencies=[Depends(get_current_user)])
 def get_workouts(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user)
@@ -197,7 +197,7 @@ def get_workouts(
     return db.query(models.Workout).filter(models.Workout.user_id == current_user.id).all()
 
 # 운동 결과 반환 API
-@app.get("/workouts/{workout_id}/result")
+@app.get("/api/v1/workouts/{workout_id}/result")
 def get_workout_result(
     workout_id: int = Path(..., description="Workout ID"),
     db: Session = Depends(database.get_db),
