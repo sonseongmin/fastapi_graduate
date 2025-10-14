@@ -3,7 +3,7 @@ import uuid
 import io
 import httpx
 from fastapi import (
-    FastAPI, Depends, HTTPException, File, UploadFile, Request, APIRouter, Path
+    FastAPI, Depends, HTTPException, File, UploadFile, Request, APIRouter, Path, status
 )
 from app.routers import workout_routes
 from sqlalchemy.orm import Session
@@ -13,7 +13,7 @@ from passlib.context import CryptContext
 from app.auth import get_current_user
 from app.schemas import AnalyzeResponse
 from app.routers import auth_extra
-from fastapi import status
+from fastapi.responses import JSONResponse
 
 # FastAPI 앱 초기화
 app = FastAPI()
@@ -247,7 +247,7 @@ def persist_analysis_to_db(result: dict, user_id: int) -> int:
 from app.schemas import AnalyzeResponse
 
 # --- 분석 요청 (비동기 job_id 반환)
-@router.post("/api/v1/exercise/analyze", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/api/v1/exercise/analyze", status_code=status.HTTP_200_OK)
 async def analyze_exercise(
     file: UploadFile = File(...),
     current_user: models.User = Depends(get_current_user)
@@ -258,21 +258,33 @@ async def analyze_exercise(
     if not (is_video_mime or is_video_ext):
         raise HTTPException(status_code=400, detail="영상 파일만 업로드 가능합니다.")
 
-    # ✅ job_id 생성
-    job_id = str(uuid.uuid4())
-    JOB_STATUS[job_id] = {"status": "pending", "result": None}
-
-    # ✅ 파일 메모리에 읽기
     file_bytes = await file.read()
     await file.close()
 
-    # ✅ 백그라운드 태스크로 AI 분석 실행
-    asyncio.create_task(
-        process_analysis_task(job_id, file_bytes, file.filename, file.content_type, current_user.id)
-    )
+    try:
+        # 🔹 AI 분석 동기 실행
+        result = await asyncio.to_thread(analyze_video_bytes, file_bytes, file.filename, file.content_type)
+        workout_id = await asyncio.to_thread(persist_analysis_to_db, result, current_user.id)
 
-    # ✅ 즉시 job_id 반환
-    return {"job_id": job_id, "status": "pending"}
+        exercise_type = result.get("exercise_type", "unknown")
+        rep_count = result.get("rep_count") or result.get("count") or 0
+        calories = calculate_calories(exercise_type, int(rep_count))
+        avg_accuracy = result.get("avg_accuracy") or result.get("acc") or 90
+
+        final_result = {
+            "exercise_type": exercise_type,
+            "rep_count": rep_count,
+            "calories": calories,
+            "avg_accuracy": avg_accuracy,
+            "workout_id": workout_id
+        }
+
+        # 🔹 최종 결과 반환
+        return JSONResponse(content=final_result, status_code=200)
+
+    except Exception as e:
+        logger.exception(f"[AI ERROR] analyze_exercise failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 인바디 데이터 등록
 @app.post("/api/v1/inbody", response_model=schemas.InbodyOut)
