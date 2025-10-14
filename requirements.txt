@@ -8,3 +8,4 @@ email-validator
 sqlalchemy
 uvicorn
 httpx
+request
