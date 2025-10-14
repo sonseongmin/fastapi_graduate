@@ -24,7 +24,8 @@ import shutil
 import httpx
 import json
 from fastapi import Form
-
+import logging
+logger = logging.getLogger("uvicorn.error")
 JOB_STATUS= {}
 
 def analyze_video(file_path: str, category: str) -> dict:
@@ -345,7 +346,7 @@ async def process_analysis_task(job_id: str, file_bytes: bytes, filename: str, c
 
         JOB_STATUS[job_id].update({"status": "done", "result": result})
     except Exception as e:
-        print(f"[ERROR] process_analysis_task failed: {e}", flush=True)
+        logger.exception(f"[AI ERROR] process_analysis_task failed: {e}") 
         JOB_STATUS[job_id].update({"status": "error", "error": str(e)})
 
 app.include_router(auth.router)
