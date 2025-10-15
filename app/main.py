@@ -387,5 +387,29 @@ except ImportError:
 
 # ✅ 로컬 router는 꼭 마지막에 등록!
 app.include_router(router)
+# ✅ 운동 기록 초기화 (DELETE)
+@app.delete("/api/v1/workouts/reset", status_code=204)
+def reset_user_workouts(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    현재 로그인한 사용자의 운동 기록 전체 삭제
+    """
+    deleted_count = (
+        db.query(models.Workout)
+        .filter(models.Workout.user_id == current_user.id)
+        .delete()
+    )
+    db.commit()
 
+    if deleted_count == 0:
+        return JSONResponse(
+            content={"message": "삭제할 운동 기록이 없습니다."}, status_code=200
+        )
+
+    return JSONResponse(
+        content={"message": f"{deleted_count}개의 운동 기록이 삭제되었습니다."},
+        status_code=200,
+    )
 #커밋용
