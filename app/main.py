@@ -207,8 +207,18 @@ def get_workout_result(
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
 
-    # exercise_type이 Enum일 경우 .value, 문자열 컬럼이면 그대로 접근
-    exercise_type_value = workout.exercise_type.value if hasattr(workout.exercise_type, "value") else workout.exercise_type
+    exercise_type_raw = workout.exercise_type
+    NORMALIZE_MAP = {
+        "benchpress": "bench_press",
+        "jumpingjack": "jumping_jack",
+        "situp": "sit_up",
+        "frontraise": "front_raise",
+    }
+
+    if isinstance(exercise_type_raw, str):
+        exercise_type_value = NORMALIZE_MAP.get(exercise_type_raw, exercise_type_raw)
+    else:
+        exercise_type_value = exercise_type_raw.value
 
     return {
         "workout_id": workout.id,
