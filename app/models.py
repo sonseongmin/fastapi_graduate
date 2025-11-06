@@ -8,12 +8,12 @@ Base = declarative_base()
 # 운동 종류 enum
 class ExerciseType(enum.Enum):
     squat = "squat"
-    lunge = "lunge"
-    pushup = "pushup"
-    plank = "plank"
-    situp = "situp"
+    situp = "sit_up"
     pullup = "pullup"
-    jumping_jack = "jumping_jack"
+    pushup = "pushup"    
+    frontraise = "front_raise"
+    benchpress = "bench_press"
+    jumpingjack = "jumpingjack"
 
 # 사용자 테이블
 class User(Base):
