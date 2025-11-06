@@ -27,9 +27,12 @@ class UserOut(BaseModel):
 # 운동 종류 Enum (운동 기록 등에서 사용)
 class ExerciseType(str, Enum):
     squat = "squat"
-    pushup = "pushup"
+    situp = "sit_up"
     pullup = "pullup"
-    jumping_jack = "jumping_jack"
+    pushup = "pushup"    
+    frontraise = "front_raise"
+    benchpress = "bench_press"
+    jumpingjack = "jumpingjack"
 
 
 # 운동 기록 등록 시 사용하는 요청 데이터 모델
